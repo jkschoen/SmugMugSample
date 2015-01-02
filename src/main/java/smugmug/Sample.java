@@ -1,11 +1,20 @@
 package smugmug;
 
-import com.sun.jersey.api.client.Client;
-import com.sun.jersey.api.client.WebResource;
-import com.sun.jersey.api.client.filter.LoggingFilter;
-import com.sun.jersey.oauth.client.OAuthClientFilter;
-import com.sun.jersey.oauth.signature.OAuthParameters;
-import com.sun.jersey.oauth.signature.OAuthSecrets;
+import java.awt.Desktop;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.URI;
+import java.net.URISyntaxException;
+import javax.ws.rs.client.Client;
+import javax.ws.rs.client.ClientBuilder;
+import javax.ws.rs.client.WebTarget;
+import javax.ws.rs.core.Feature;
+import javax.ws.rs.core.MediaType;
+import org.glassfish.jersey.client.oauth1.AccessToken;
+import org.glassfish.jersey.client.oauth1.ConsumerCredentials;
+import org.glassfish.jersey.client.oauth1.OAuth1AuthorizationFlow;
+import org.glassfish.jersey.client.oauth1.OAuth1ClientSupport;
 
 /**
  *
@@ -14,40 +23,48 @@ import com.sun.jersey.oauth.signature.OAuthSecrets;
 public class Sample {
     
     public static String APP_NAME="TEST";
-    public static String API_SECRET="<YOUR API SECRET>";
-    public static String API_KEY="<YOUR API KEY>";
+    public static String API_SECRET="<Your Secret>";
+    public static String API_KEY="<Your Key>";
     
-    //this is a base client that jersey will use for requests
-    public static Client CLIENT = Client.create();
+    public static final String OAUTH_ORIGIN = "https://secure.smugmug.com";
+    public static final String REQUEST_TOKEN_URL = OAUTH_ORIGIN + "/services/oauth/1.0a/getRequestToken?oauth_callback=oob";
+    public static final String ACCESS_TOKEN_URL = OAUTH_ORIGIN + "/services/oauth/1.0a/getAccessToken";
+    public static final String AUTHORIZE_URL = OAUTH_ORIGIN + "/services/oauth/1.0a/authorize";
     
-    public static void main(String[] args){
-        //this is the url we want to send a request to
-        WebResource resource = CLIENT.resource("https://api.smugmug.com/services/oauth/1.0a/getRequestToken");
-
-        //since this is for a non web app we need to add a query param
-        resource = resource.queryParam("oauth_callback", "oob");
-        //not sure if this makes a difference or not, but I noticed this while
-        //using the api browser, so figured I would add it
-        resource = resource.queryParam("_accept", "application/json");
+    
+    public static void main(String[] args) throws IOException, URISyntaxException{
+        ConsumerCredentials consumerCredentials = new ConsumerCredentials(API_KEY, API_SECRET);
+        OAuth1AuthorizationFlow authFlow = OAuth1ClientSupport.builder(consumerCredentials)
+            .authorizationFlow(
+                REQUEST_TOKEN_URL,
+                ACCESS_TOKEN_URL,
+                AUTHORIZE_URL)
+            .build();
         
-        //this adds a logger to log the requests and responses for debugging
-        resource.addFilter(new LoggingFilter());
+        String authorizationUri = authFlow.start();
+        Desktop.getDesktop().browse(new URI(authorizationUri));
+        System.out.println("Once you authenticated with SmugMug and granted permissions to this app, press Enter to continue.");
+        BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
+        String code = in.readLine();
         
-        //this sets the api key and secret
-        OAuthSecrets secrets = new OAuthSecrets().consumerSecret(API_SECRET);
-        OAuthParameters oauthParams = new OAuthParameters().consumerKey(API_KEY).
-                signatureMethod("HMAC-SHA1").version("1.0a");
-        OAuthClientFilter filter = new OAuthClientFilter(CLIENT.getProviders(), oauthParams, secrets);
-        resource.addFilter(filter);
+        AccessToken accessToken = authFlow.finish(code);
+        System.out.println(accessToken);
+        System.out.println("Below you will find the 2 peices of information you need to store, OAUTH_TOKEN_ID and OAUTH_TOKEN_SECRET:");
+        System.out.println("OAUTH_TOKEN_ID     => '" + accessToken.getToken() + "'");
+        System.out.println("OAUTH_TOKEN_SECRET => '" + accessToken.getAccessTokenSecret() + "'");
         
-        WebResource.Builder builder = resource.getRequestBuilder();
-        //tell it we want json back
-        builder = builder.accept("application/json");
-        //set the User agent to the app name
-        builder = builder.header("User-Agent", APP_NAME);
-        
-        //get the response back as a string
-        String response = builder.get(String.class); 
+        //now that we have the token we need to build the client
+        Feature filterFeature = OAuth1ClientSupport.builder(consumerCredentials)
+            .feature()
+            .accessToken(accessToken)
+            .build();
+        Client client = ClientBuilder.newBuilder()
+            .register(filterFeature)
+            .build();
+        //now any requests made using this client will already have the oauth details
+        WebTarget target = client.target("https://api.smugmug.com/").path("/api/v2!authuser");
+        String result = target.request(MediaType.APPLICATION_JSON_TYPE).get(String.class);
+        System.out.println(result);
     }
     
 }
